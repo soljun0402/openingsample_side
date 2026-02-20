@@ -809,8 +809,8 @@ export const ServiceJourneyView: React.FC<ServiceJourneyViewProps> = ({ onBack, 
 
   const goToNextStep = () => {
     if (currentStep === 6) {
-      // 마지막 단계에서 결과 보기 (게스트 모드일 경우 PDF 생성)
-      if (isGuestMode) {
+      // 마지막 단계에서 결과 보기 (게스트 모드일 경우 PDF 생성, 개발 모드에서도 허용)
+      if (isGuestMode || import.meta.env.DEV) {
         setEstimateResult({
           customerName: "예비 창업자",
           totalCostRange: {

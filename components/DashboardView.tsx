@@ -10,8 +10,10 @@ import {
   Coffee, Utensils, Beer, ShoppingBag, Scissors, Dumbbell,
   GraduationCap, Building, Monitor, Briefcase, MoreHorizontal,
   ImagePlus, X, CreditCard, FileText, Shield, Check, ArrowRight,
-  Hammer
+  Hammer, BarChart3
 } from 'lucide-react';
+import { EstimateResultView } from './EstimateResultView';
+import { EstimatePDFProps } from './EstimatePDFView';
 
 interface DashboardViewProps {
   onNavigateToProject: () => void;
@@ -41,6 +43,7 @@ interface ProjectDetail {
     rating: number;
     completed_projects: number;
   };
+  checklist_data?: any[];
 }
 
 interface Message {
@@ -53,9 +56,9 @@ interface Message {
 
 // 단계별 테마 색상
 const STEP_THEMES: Record<number, { gradient: string; light: string; text: string; progress: string; badge: string; icon: string }> = {
-  7:  { gradient: 'from-blue-500 to-blue-600', light: 'bg-blue-50', text: 'text-blue-600', progress: 'bg-blue-500', badge: 'bg-blue-100 text-blue-700', icon: 'text-blue-500' },
-  8:  { gradient: 'from-violet-500 to-purple-600', light: 'bg-violet-50', text: 'text-violet-600', progress: 'bg-violet-500', badge: 'bg-violet-100 text-violet-700', icon: 'text-violet-500' },
-  9:  { gradient: 'from-orange-500 to-amber-600', light: 'bg-orange-50', text: 'text-orange-600', progress: 'bg-orange-500', badge: 'bg-orange-100 text-orange-700', icon: 'text-orange-500' },
+  7: { gradient: 'from-blue-500 to-blue-600', light: 'bg-blue-50', text: 'text-blue-600', progress: 'bg-blue-500', badge: 'bg-blue-100 text-blue-700', icon: 'text-blue-500' },
+  8: { gradient: 'from-violet-500 to-purple-600', light: 'bg-violet-50', text: 'text-violet-600', progress: 'bg-violet-500', badge: 'bg-violet-100 text-violet-700', icon: 'text-violet-500' },
+  9: { gradient: 'from-orange-500 to-amber-600', light: 'bg-orange-50', text: 'text-orange-600', progress: 'bg-orange-500', badge: 'bg-orange-100 text-orange-700', icon: 'text-orange-500' },
   10: { gradient: 'from-emerald-500 to-teal-600', light: 'bg-emerald-50', text: 'text-emerald-600', progress: 'bg-emerald-500', badge: 'bg-emerald-100 text-emerald-700', icon: 'text-emerald-500' },
   11: { gradient: 'from-green-500 to-lime-600', light: 'bg-green-50', text: 'text-green-600', progress: 'bg-green-500', badge: 'bg-green-100 text-green-700', icon: 'text-green-500' },
   12: { gradient: 'from-slate-500 to-gray-600', light: 'bg-slate-50', text: 'text-slate-600', progress: 'bg-slate-500', badge: 'bg-slate-100 text-slate-700', icon: 'text-slate-500' },
@@ -104,7 +107,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
   const [imageError, setImageError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [tossPayLoading, setTossPayLoading] = useState<string | null>(null); // payment_id being processed
-  const [tossRedirectParams, setTossRedirectParams] = useState<{paymentKey: string; orderId: string; amount: string; paymentId: string} | null>(null);
+  const [tossRedirectParams, setTossRedirectParams] = useState<{ paymentKey: string; orderId: string; amount: string; paymentId: string } | null>(null);
+  const [showEstimateResult, setShowEstimateResult] = useState(false);
+  const [estimateResult, setEstimateResult] = useState<EstimatePDFProps | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const msgChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const projChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -277,22 +282,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
     if (!paymentId || !project?.id) return;
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const { data: { session } } = await supabase.auth.getSession();
+      const isMock = paymentId.startsWith('mock_');
 
-      const res = await fetch(`${supabaseUrl}/functions/v1/confirm-payment`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ paymentKey, orderId, amount, paymentId }),
-      });
+      if (isMock) {
+        console.log('[DevMode] Bypassing server confirmation for mock payment');
+        // 직접 상태 업데이트
+        const nextStatus = project.current_step >= 9 ? 'IN_PROGRESS' : 'PM_ASSIGNED';
+        const { error: updateError } = await supabase
+          .from('startup_projects')
+          .update({ status: nextStatus })
+          .eq('id', project.id);
 
-      const result = await res.json();
+        if (updateError) throw updateError;
+      } else {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const { data: { session } } = await supabase.auth.getSession();
 
-      if (!res.ok) {
-        throw new Error(result.error || '결제 확인 실패');
+        const res = await fetch(`${supabaseUrl}/functions/v1/confirm-payment`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({ paymentKey, orderId, amount, paymentId }),
+        });
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          throw new Error(result.error || '결제 확인 실패');
+        }
       }
 
       // 결제 완료 알림
@@ -301,12 +320,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
           userId: currentUserId,
           projectId: project.id,
           type: 'PAYMENT_COMPLETED',
-          title: '결제 완료',
-          message: `${amount.toLocaleString('ko-KR')}원 결제가 완료되었습니다.`,
+          title: isMock ? '[Dev] 결제 우회 완료' : '결제 완료',
+          message: isMock ? '개발 모드에서 결제가 성공된 것으로 처리되었습니다.' : `${amount.toLocaleString('ko-KR')}원 결제가 완료되었습니다.`,
         });
       }
 
-      setStepToast('결제가 완료되었습니다!');
+      setStepToast(isMock ? '개발용 결제 우회가 완료되었습니다.' : '결제가 완료되었습니다!');
       setTimeout(() => setStepToast(null), 4000);
       loadProject();
     } catch (err: any) {
@@ -325,6 +344,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
         alert('결제를 진행하려면 로그인이 필요합니다.');
       }
       return;
+    }
+
+    // Developer Mode Bypass
+    if (import.meta.env.DEV) {
+      if (window.confirm('[Developer Mode] 결제 과정을 생략하고 바로 승인 상태로 변경하시겠습니까?')) {
+        console.log('[DevMode] Initiating payment bypass');
+        await completeTossPayment('mock_key', `mock_order_${Date.now()}`, amount, `mock_${paymentId}`);
+        return;
+      }
     }
 
     setTossPayLoading(paymentId);
@@ -513,6 +541,54 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
     reader.readAsDataURL(file);
   };
 
+  const handleOpenReport = () => {
+    if (!project) return;
+
+    // Convert dashboard project data to PDF props
+    const dongs: any = {
+      '역삼동': { footTraffic: '일 25만 명', competitors: 42 },
+      '논현동': { footTraffic: '일 18만 명', competitors: 35 },
+      '신사동': { footTraffic: '일 20만 명', competitors: 56 },
+      '청담동': { footTraffic: '일 12만 명', competitors: 28 },
+      '삼성동': { footTraffic: '일 22만 명', competitors: 45 },
+      '대치동': { footTraffic: '일 15만 명', competitors: 31 },
+    };
+
+    const dongInfo = dongs[project.location_dong] || { footTraffic: '정보 없음', competitors: 0 };
+
+    setEstimateResult({
+      customerName: userName,
+      projectName: `${project.location_dong} ${BUSINESS_LABELS[project.business_category]?.label || '매장'} 창업`,
+      totalCostRange: {
+        min: project.estimated_total,
+        max: Math.round(project.estimated_total * 1.2 / 100000) * 100000 // Mock range
+      },
+      locationData: {
+        region: `서울시 강남구 ${project.location_dong}`,
+        analysis: [
+          { label: "주요 타겟", value: "20-30대 직장인/주거" },
+          { label: "유동 인구", value: dongInfo.footTraffic },
+          { label: "경쟁 점포", value: `${dongInfo.competitors}개 (반경 500m)` },
+        ]
+      },
+      costBreakdown: (project.checklist_data || []).filter(i => (i.estimatedCost?.max || 0) > 0).map(item => {
+        const multiplier = item.estimatedCost.unit.includes('평당') ? project.store_size : 1;
+        return {
+          label: item.title,
+          min: item.estimatedCost.min * multiplier * 100000,
+          max: item.estimatedCost.max * multiplier * 100000
+        };
+      }),
+      checklist: {
+        readyCount: (project.checklist_data || []).filter(i => i.status === 'done').length,
+        worryCount: (project.checklist_data || []).filter(i => i.status === 'worry').length,
+        worryItems: (project.checklist_data || []).filter(i => i.status === 'worry').map(i => i.title),
+        readyItems: (project.checklist_data || []).filter(i => i.status === 'done').map(i => i.title)
+      }
+    });
+    setShowEstimateResult(true);
+  };
+
 
   if (loading) {
     return (
@@ -641,13 +717,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
 
             return (
               <div key={msg.id} className={`flex ${msg.sender_type === 'USER' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${
-                  msg.sender_type === 'USER'
-                    ? 'bg-brand-600 text-white rounded-br-md'
-                    : msg.sender_type === 'PM'
-                      ? 'bg-white border border-slate-200 shadow-sm rounded-bl-md'
-                      : 'bg-slate-200 text-slate-600 text-xs'
-                }`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${msg.sender_type === 'USER'
+                  ? 'bg-brand-600 text-white rounded-br-md'
+                  : msg.sender_type === 'PM'
+                    ? 'bg-white border border-slate-200 shadow-sm rounded-bl-md'
+                    : 'bg-slate-200 text-slate-600 text-xs'
+                  }`}>
                   {msg.sender_type !== 'USER' && (
                     <p className={`text-xs font-bold mb-1 ${msg.sender_type === 'PM' ? 'text-brand-600' : 'text-slate-400'}`}>
                       {msg.sender_type === 'PM' ? project.pm?.name || '매니저' : '시스템'}
@@ -766,7 +841,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
               담당 매니저가 배정되기 이전이에요
             </h3>
             <p className="text-sm text-slate-400 leading-relaxed">
-              담당 매니저가 배정되면<br/>
+              담당 매니저가 배정되면<br />
               알림으로 알려드릴게요!
             </p>
             <p className="text-xs text-slate-300 mt-2">보통 1영업일 이내 배정됩니다</p>
@@ -869,9 +944,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
               {[7, 8, 9, 10, 11, 12].map(step => (
                 <div
                   key={step}
-                  className={`h-2 flex-1 rounded-full transition-all duration-500 ${
-                    step <= project.current_step ? 'bg-white' : 'bg-white/20'
-                  }`}
+                  className={`h-2 flex-1 rounded-full transition-all duration-500 ${step <= project.current_step ? 'bg-white' : 'bg-white/20'
+                    }`}
                 />
               ))}
             </div>
@@ -1058,6 +1132,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
             <MessageCircle size={16} />
             {isGuestMode ? '로그인 후 결제하기' : '채팅에서 결제 확인하기'}
           </button>
+
+          {/* 가상 보고서 보기 버튼 (개발/우회용) */}
+          {(import.meta.env.DEV || project.status !== 'PENDING_PM') && (
+            <button
+              onClick={handleOpenReport}
+              className="w-full mt-2 py-2.5 border border-orange-200 text-orange-600 rounded-xl text-xs font-bold flex items-center justify-center gap-2"
+            >
+              <BarChart3 size={14} />
+              상세 분석 보고서(PDF) 확인하기
+            </button>
+          )}
         </div>
       )}
       {project.current_step === 10 && (
@@ -1130,11 +1215,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
 
             return (
               <div key={step} className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all ${
-                  isDone ? `${theme.progress} text-white` :
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all ${isDone ? `${theme.progress} text-white` :
                   isActive ? `${theme.progress} text-white ring-4 ring-offset-2 ${theme.light.replace('bg-', 'ring-')}` :
-                  'bg-slate-100 text-slate-400'
-                }`}>
+                    'bg-slate-100 text-slate-400'
+                  }`}>
                   {isDone ? <CheckCircle size={16} /> : stepNum}
                 </div>
                 <div className="flex-1">
@@ -1171,12 +1255,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
               return (
                 <div key={msg.id} className="px-5 py-3">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-xs font-bold ${
-                      msg.sender_type === 'PM' ? 'text-brand-600' :
+                    <span className={`text-xs font-bold ${msg.sender_type === 'PM' ? 'text-brand-600' :
                       msg.sender_type === 'USER' ? 'text-slate-500' : 'text-slate-400'
-                    }`}>
+                      }`}>
                       {msg.sender_type === 'PM' ? project.pm?.name || '매니저' :
-                       msg.sender_type === 'USER' ? '나' : '시스템'}
+                        msg.sender_type === 'USER' ? '나' : '시스템'}
                     </span>
                     <span className="text-xs text-slate-300">
                       {new Date(msg.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
@@ -1193,6 +1276,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToProjec
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* PDF 분석 결과 모달 */}
+      {showEstimateResult && estimateResult && (
+        <div className="fixed inset-0 z-[100] bg-white overflow-y-auto animate-slide-up">
+          <div className="sticky top-0 z-50 bg-white border-b px-4 h-14 flex items-center justify-between">
+            <h2 className="font-bold text-slate-900">상세 분석 결과</h2>
+            <button
+              onClick={() => setShowEstimateResult(false)}
+              className="p-2 text-slate-400 hover:text-slate-600"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <EstimateResultView data={estimateResult} />
+          <div className="p-6 bg-slate-50 border-t">
+            <button
+              onClick={() => setShowEstimateResult(false)}
+              className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold active:scale-[0.98] transition-transform"
+            >
+              닫기
+            </button>
           </div>
         </div>
       )}
